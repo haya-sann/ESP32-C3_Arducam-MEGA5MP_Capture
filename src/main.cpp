@@ -1,8 +1,12 @@
-#include <Arduino.h>
 
+
+#include <Arduino.h>
+/*
 // Copyright 2021 Arducam Technology co., Ltd. All Rights Reserved.
 // License: MIT License (https://en.wikipedia.org/wiki/MIT_License)
 // Web: http://www.ArduCAM.com
+View at : http://192.168.0.37
+*/
 #include <WiFi.h>
 #include <WebServer.h>
 #include "Arducam_Mega.h"
@@ -25,7 +29,8 @@ Arducam_Mega myCAM( CS );
 uint8_t imageData = 0;
 uint8_t imageDataNext = 0;
 uint8_t headFlag = 0;
-const size_t bufferSize = 32768; // Increased buffer size from 2048;
+const size_t bufferSize = 16384; // Increased buffer size from 2048;
+// const size_t bufferSize = 32768; // Increased buffer size from 2048;
 // const size_t bufferSize = 65536; // Increased buffer size from 2048;
 uint8_t buffer[bufferSize] = {0};
 
@@ -64,6 +69,97 @@ void sendImageData(void)
         }
     }
 }
+void handleRoot() {
+    WiFiClient client = server.client();
+    
+    // HTMLとJavaScriptの送信
+    String response = "HTTP/1.1 200 OK\r\n";
+    response += "Content-Type: text/html\r\n\r\n"; // Content-Typeをtext/htmlに設定
+    response += R"(
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <meta charset="UTF-8">
+            <title>カメラ制御</title>
+        </head>
+        <body>
+            <button id="brightButton">明るく</button>
+            <button id="defaultButton">標準</button>
+            <button id="darkButton">暗く</button>
+            <img id="cameraStream" src="/stream" />
+            <script>
+                // CAM_BRIGHTNESS_LEVELオブジェクトを定義
+                    const CAM_BRIGHTNESS_LEVEL = {
+                    LEVEL_4: 4,
+                    DEFAULT: 0,
+                    LEVEL_2: 2
+                };
+                function setBrightness(value) {
+                // ESP32に対してHTTPリクエストを送信
+                    fetch(`./setBrightness?value=${value}`)
+                    .then(response => response.text())
+                    .then(data => console.log(data))
+                    .catch(error => console.error('Error:', error));
+                }
+                // ボタンがクリックされたときの処理を定義
+                document.getElementById('brightButton').addEventListener('click', function() {
+                    const brightnessValue = CAM_BRIGHTNESS_LEVEL.LEVEL_4;
+                    setBrightness(brightnessValue);
+                    alert('明るく設定しようとしてるんですけどぉ');
+                });
+                document.getElementById('defaultButton').addEventListener('click', function() {
+                    const brightnessValue = CAM_BRIGHTNESS_LEVEL.DEFAULT;
+                    setBrightness(brightnessValue);
+                    alert('標準に設定しようとしてるんですけどぉ');
+                });
+                document.getElementById('darkButton').addEventListener('click', function() {
+                    const brightnessValue = CAM_BRIGHTNESS_LEVEL.LEVEL_2;
+                    setBrightness(brightnessValue);
+                    alert('暗く設定しようとしてるんですけどぉ');
+                });
+            </script>
+        </body>
+        </html>
+    )";
+    server.sendContent(response);
+}
+
+void setBrightness(CAM_BRIGHTNESS_LEVEL brightnessValue)
+{
+    Serial.print("Setting brightness(For debugging):");
+    Serial.println(brightnessValue);
+    // myCAM.setEV(CAM_EV_LEVEL_2);                 // Adjust the parameter as needed
+    // myCAM.setBrightness(CAM_BRIGHTNESS_LEVEL_2); // Configures the brightness of the image
+    // myCAM.setEV(brightnessValue);                 // Adjust the parameter as needed
+    myCAM.setBrightness(brightnessValue); // Configures the brightness of the image
+}
+
+void handleSetBrightness() {
+        Serial.println("Entered handle setBrightness(For debugging):");
+    if (server.hasArg("value")) {
+        int brightnessValue = server.arg("value").toInt();
+        Serial.print("handle setBrightness(For debugging):");
+        Serial.println(brightnessValue);
+        setBrightness(static_cast<CAM_BRIGHTNESS_LEVEL>(brightnessValue));
+
+        // String level = server.arg("level");
+        // CAM_BRIGHTNESS_LEVEL brightnessValue;
+        // if (level == "bright") {
+        //     brightnessValue = CAM_BRIGHTNESS_LEVEL_4;
+        // } else if (level == "normal") {
+        //     brightnessValue = CAM_BRIGHTNESS_LEVEL_DEFAULT;
+        // } else if (level == "dark") {
+        //     brightnessValue = CAM_BRIGHTNESS_LEVEL_MINUS_2;
+        // } else {
+        //     server.send(400, "text/plain", "Invalid level");
+        //     return;
+        // }
+        // setBrightness(brightnessValue); // Call the function to set brightness
+        server.send(200, "text/plain", String(brightnessValue));
+    } else {
+        server.send(400, "text/plain", "Bad Request");
+    }
+}
 
 void captureCallbackFunction(void)
 {
@@ -77,23 +173,28 @@ void captureCallbackFunction(void)
     sendImageData();
 }
 
-void streamCallbackFunction(void)
-{
+void streamCallbackFunction(void){
   WiFiClient client = server.client();
-  
   String response = "HTTP/1.1 200 OK\r\n";
-  response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
-  server.sendContent(response);
-  while(1)
-  {
+    // response += "Content-Type: text/html\r\n\r\n"; // Content-Typeをtext/htmlに設定
+    response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
+    server.sendContent(response);
+
+    // client.print(response);
+    while(1) { // 画像データの送信ループ
     myCAM.takePicture(imageMode,CAM_IMAGE_PIX_FMT_JPG);
-    if (!client.connected()) break;
+    if (!client.connected()) break; //ネットワーク接続が切れた場合にループを終了
     response = "--frame\r\n";
     response += "Content-Type: image/jpeg\r\n\r\n";
-    server.sendContent(response); 
-    sendImageData();      
+    server.sendContent(response);
+
+//    server.sendContent(response);
+    // client.print(response); 
+    sendImageData();
+    server.sendContent("\r\n");
+    // client.print("\r\n");
+    }
   }
-}
 
 void handleNotFound(void)
 {
@@ -138,19 +239,19 @@ void setup(){
 
     myCAM.begin();
     myCAM.setAutoFocus(2);
-    myCAM.setEV(CAM_EV_LEVEL_2); // Adjust the parameter as needed
-    myCAM.setBrightness(CAM_BRIGHTNESS_LEVEL_2); //Configures the brightness of the image
 
-    server.enableCORS();
-    server.on("/capture",HTTP_GET,captureCallbackFunction);
-    server.on("/stream",HTTP_GET,streamCallbackFunction);
+    server.enableCORS(); //CORS（Cross-Origin Resource Sharing）を有効にします。これにより、異なるオリジンからのリクエストが許可されます
+    server.on("/",handleRoot);
+    server.on("/capture",captureCallbackFunction);
+    server.on("/stream",streamCallbackFunction);
+    server.on("/setBrightness", handleSetBrightness);
+    // server.on("/setBrightness", HTTP_GET, handleSetBrightness);
     server.onNotFound(handleNotFound);
     server.begin();
 
     // Print free heap memory
     Serial.print("Free heap at setup: ");
     Serial.println(ESP.getFreeHeap());
-
 }
 
 void loop(){
@@ -161,5 +262,5 @@ void loop(){
         Serial.println(ESP.getFreeHeap());
         lastPrintTime = millis();
     }
-  server.handleClient();
+    server.handleClient();
 }
