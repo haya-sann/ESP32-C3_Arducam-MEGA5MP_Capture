@@ -1,266 +1,193 @@
-
-
 #include <Arduino.h>
-/*
-// Copyright 2021 Arducam Technology co., Ltd. All Rights Reserved.
-// License: MIT License (https://en.wikipedia.org/wiki/MIT_License)
-// Web: http://www.ArduCAM.com
-View at : http://192.168.0.37
-*/
-#include <WiFi.h>
-#include <WebServer.h>
 #include "Arducam_Mega.h"
-// #include "Platform.h"
+#include <ESPAsyncWebServer.h>
+#include <ESPAsyncWiFiManager.h>
 
-#include <WiFiManager.h> // Include the WiFiManager library
-WiFiManager wifiManager;
+// Webサーバーのインスタンス化
+AsyncWebServer server(80);
+DNSServer dns;
+AsyncWiFiManager wifiManager(&server, &dns);
 
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_QVGA; // =1 ,320x240
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_VGA; // =2 , 640x480
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_SVGA; // =3, 800x600
-CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_SXGAM; // =4, 1024x768
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_UXGA; // =5, 1600x1200
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_UXGA2; // =7, 1600x1600
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_QXGA; // =8, 2048x1536 
-// CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_WQXGA2; // =9 , 2592x1944
-WebServer server(80);
+CAM_IMAGE_MODE imageMode = CAM_IMAGE_MODE_SXGAM; // =5, 1024x768
 const int CS = 1; //for ESP32 CS=17, ESPC3 CS=1
-Arducam_Mega myCAM( CS );
+Arducam_Mega myCAM(CS);
 uint8_t imageData = 0;
 uint8_t imageDataNext = 0;
 uint8_t headFlag = 0;
-const size_t bufferSize = 16384; // Increased buffer size from 2048;
-// const size_t bufferSize = 32768; // Increased buffer size from 2048;
-// const size_t bufferSize = 65536; // Increased buffer size from 2048;
+const size_t bufferSize = 4096; // Increased buffer size from 2048;
 uint8_t buffer[bufferSize] = {0};
 
-void sendImageData(void)
+void sendImageData(AsyncWebServerRequest *request)
 {
     int i = 0;
-    WiFiClient client = server.client();
-    if (!client.connected()) return;
-    while (myCAM.getReceivedLength())
-    {
+    AsyncClient* client = request->client();
+    if (!client->connected()) return;
+    while (myCAM.getReceivedLength()) {
         imageData = imageDataNext;
         imageDataNext = myCAM.readByte();
-        if (headFlag == 1)
-        {
-            buffer[i++]=imageDataNext;  
-            if (i >= bufferSize)
-            {
-                if (!client.connected()) break;
-                client.write(buffer, i);
+        if (headFlag == 1) {
+            buffer[i++] = imageDataNext;
+            if (i >= bufferSize)  {
+                if (!client->connected()) break;
+                client->write(reinterpret_cast<const char*>(buffer), i);
                 i = 0;
             }
         }
-        if (imageData == 0xff && imageDataNext ==0xd8)
-        {
+        if (imageData == 0xff && imageDataNext == 0xd8) {
             headFlag = 1;
-            buffer[i++]=imageData;
-            buffer[i++]=imageDataNext;  
+            buffer[i++] = imageData;
+            buffer[i++] = imageDataNext;
         }
-        if (imageData == 0xff && imageDataNext ==0xd9)
-        {
+        if (imageData == 0xff && imageDataNext == 0xd9) {
             headFlag = 0;
-            if (!client.connected()) break;
-            client.write(buffer, i);
+            if (!client->connected()) break;
+            client->write(reinterpret_cast<const char*>(buffer), i);
             i = 0;
             break;
         }
     }
-}
-void handleRoot() {
-    WiFiClient client = server.client();
-    
-    // HTMLとJavaScriptの送信
-    String response = "HTTP/1.1 200 OK\r\n";
-    response += "Content-Type: text/html\r\n\r\n"; // Content-Typeをtext/htmlに設定
-    response += R"(
-        <!DOCTYPE html>
-        <html lang="ja">
-        <head>
-            <meta charset="UTF-8">
-            <title>カメラ制御</title>
-        </head>
-        <body>
-            <button id="brightButton">明るく</button>
-            <button id="defaultButton">標準</button>
-            <button id="darkButton">暗く</button>
-            <img id="cameraStream" src="/stream" />
-            <script>
-                // CAM_BRIGHTNESS_LEVELオブジェクトを定義
-                    const CAM_BRIGHTNESS_LEVEL = {
-                    LEVEL_4: 4,
-                    DEFAULT: 0,
-                    LEVEL_2: 2
-                };
-                function setBrightness(value) {
-                // ESP32に対してHTTPリクエストを送信
-                    fetch(`./setBrightness?value=${value}`)
-                    .then(response => response.text())
-                    .then(data => console.log(data))
-                    .catch(error => console.error('Error:', error));
-                }
-                // ボタンがクリックされたときの処理を定義
-                document.getElementById('brightButton').addEventListener('click', function() {
-                    const brightnessValue = CAM_BRIGHTNESS_LEVEL.LEVEL_4;
-                    setBrightness(brightnessValue);
-                    alert('明るく設定しようとしてるんですけどぉ');
-                });
-                document.getElementById('defaultButton').addEventListener('click', function() {
-                    const brightnessValue = CAM_BRIGHTNESS_LEVEL.DEFAULT;
-                    setBrightness(brightnessValue);
-                    alert('標準に設定しようとしてるんですけどぉ');
-                });
-                document.getElementById('darkButton').addEventListener('click', function() {
-                    const brightnessValue = CAM_BRIGHTNESS_LEVEL.LEVEL_2;
-                    setBrightness(brightnessValue);
-                    alert('暗く設定しようとしてるんですけどぉ');
-                });
-            </script>
-        </body>
-        </html>
-    )";
-    server.sendContent(response);
 }
 
 void setBrightness(CAM_BRIGHTNESS_LEVEL brightnessValue)
 {
     Serial.print("Setting brightness(For debugging):");
     Serial.println(brightnessValue);
-    // myCAM.setEV(CAM_EV_LEVEL_2);                 // Adjust the parameter as needed
-    // myCAM.setBrightness(CAM_BRIGHTNESS_LEVEL_2); // Configures the brightness of the image
-    // myCAM.setEV(brightnessValue);                 // Adjust the parameter as needed
     myCAM.setBrightness(brightnessValue); // Configures the brightness of the image
 }
 
-void handleSetBrightness() {
-        Serial.println("Entered handle setBrightness(For debugging):");
-    if (server.hasArg("value")) {
-        int brightnessValue = server.arg("value").toInt();
-        Serial.print("handle setBrightness(For debugging):");
-        Serial.println(brightnessValue);
-        setBrightness(static_cast<CAM_BRIGHTNESS_LEVEL>(brightnessValue));
-
-        // String level = server.arg("level");
-        // CAM_BRIGHTNESS_LEVEL brightnessValue;
-        // if (level == "bright") {
-        //     brightnessValue = CAM_BRIGHTNESS_LEVEL_4;
-        // } else if (level == "normal") {
-        //     brightnessValue = CAM_BRIGHTNESS_LEVEL_DEFAULT;
-        // } else if (level == "dark") {
-        //     brightnessValue = CAM_BRIGHTNESS_LEVEL_MINUS_2;
-        // } else {
-        //     server.send(400, "text/plain", "Invalid level");
-        //     return;
-        // }
-        // setBrightness(brightnessValue); // Call the function to set brightness
-        server.send(200, "text/plain", String(brightnessValue));
+void handleSetBrightness(AsyncWebServerRequest *request) {
+    if (request->hasParam("value")) {
+        String value = request->getParam("value")->value();
+        if (value == "HIGH") {
+            setBrightness(CAM_BRIGHTNESS_LEVEL_MINUS_4);
+        } else if (value == "DEFAULT") {
+            setBrightness(CAM_BRIGHTNESS_LEVEL_DEFAULT);
+        } else if (value == "LOW") {
+            setBrightness(CAM_BRIGHTNESS_LEVEL_2);
+        }
+        request->send(200, "text/plain", "Brightness set to " + value);
     } else {
-        server.send(400, "text/plain", "Bad Request");
+        request->send(400, "text/plain", "Bad Request");
     }
 }
 
-void captureCallbackFunction(void)
+void captureCallbackFunction(AsyncWebServerRequest *request)
 {
-    // Increase the exposure to make the image brighter
-    myCAM.takePicture(imageMode,CAM_IMAGE_PIX_FMT_JPG);
-    WiFiClient client = server.client();
-    if (!client.connected()) return;
+    myCAM.takePicture(imageMode, CAM_IMAGE_PIX_FMT_JPG);
+    AsyncClient* client = request->client();
+    if (!client->connected()) return;
     String response = "HTTP/1.1 200 OK\r\n";
     response += "Content-Type: image/jpeg\r\n";
-    response += "Content-len: " + String(7000) + "\r\n\r\n";  
-    sendImageData();
+    response += "Content-len: " + String(7000) + "\r\n\r\n";
+    sendImageData(request);
 }
 
-void streamCallbackFunction(void){
-  WiFiClient client = server.client();
-  String response = "HTTP/1.1 200 OK\r\n";
-    // response += "Content-Type: text/html\r\n\r\n"; // Content-Typeをtext/htmlに設定
-    response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
-    server.sendContent(response);
-
-    // client.print(response);
-    while(1) { // 画像データの送信ループ
-    myCAM.takePicture(imageMode,CAM_IMAGE_PIX_FMT_JPG);
-    if (!client.connected()) break; //ネットワーク接続が切れた場合にループを終了
-    response = "--frame\r\n";
-    response += "Content-Type: image/jpeg\r\n\r\n";
-    server.sendContent(response);
-
-//    server.sendContent(response);
-    // client.print(response); 
-    sendImageData();
-    server.sendContent("\r\n");
-    // client.print("\r\n");
+void streamCallbackFunction(AsyncWebServerRequest *request)
+{
+    request->send(200, "text/plain", "Streaming...");
+    Serial.println("Entered streamCallbackFunction");
+    AsyncClient* client = request->client();
+    static unsigned long lastCaptureTime = 0;
+    const unsigned long captureInterval = 10000; // Capture every 10 seconds
+    while (client->connected())
+    {
+        if (millis() - lastCaptureTime >= captureInterval)
+        {
+            captureCallbackFunction(request);
+            lastCaptureTime = millis();
+        }
     }
-  }
+}
 
-void handleNotFound(void)
+void handleNotFound(AsyncWebServerRequest *request)
 {
     String message = "Server is running!\n\n";
     message += "URI: ";
-    message += server.uri();
+    message += request->url();
     message += "\nMethod: ";
-    message += (server.method() == HTTP_GET)?"GET":"POST";
+    message += (request->method() == HTTP_GET) ? "GET" : "POST";
     message += "\nArguments: ";
-    message += server.args();
+    message += request->args();
     message += "\n";
-    server.send(200, "text/plain", message);
-    Serial.println(message);    
-    if (server.hasArg("ql"))
+    request->send(200, "text/plain", message);
+    Serial.println(message);
+    if (request->hasArg("ql"))
     {
-        imageMode = (CAM_IMAGE_MODE)server.arg("ql").toInt();
+        imageMode = (CAM_IMAGE_MODE)request->arg("ql").toInt();
     }
 }
 
-void setup(){
+void setup() {
     Serial.begin(115200);
-    WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP    
+    // WiFi接続の初期化
+    wifiManager.autoConnect("AutoConnectAP");
 
-    wifiManager.setConfigPortalBlocking(false);
-    wifiManager.setConfigPortalTimeout(60); // Set timeout for the configuration portal
-    //automatically connect using saved credentials if they exist
-    //If connection fails it starts an access point with the specified name
-
-    // wifiManager.resetSettings();
-
-    // Connect to WiFi using WiFiManager
-   if(wifiManager.autoConnect("AutoConnectAP")){
+    if (wifiManager.autoConnect("AutoConnectAP")) {
         Serial.println("connected...yeey :)");
-    }
-    else {
+    } else {
         Serial.println("Configportal running");
     }
-    // Print the assigned IP address
+
+    delay(10000); // Add a 10-second delay
     Serial.println("Connected to WiFi");
     Serial.print("Server IP Address: ");
     Serial.println(WiFi.localIP());
 
     myCAM.begin();
-    myCAM.setAutoFocus(2);
-
-    server.enableCORS(); //CORS（Cross-Origin Resource Sharing）を有効にします。これにより、異なるオリジンからのリクエストが許可されます
-    server.on("/",handleRoot);
-    server.on("/capture",captureCallbackFunction);
-    server.on("/stream",streamCallbackFunction);
-    server.on("/setBrightness", handleSetBrightness);
-    // server.on("/setBrightness", HTTP_GET, handleSetBrightness);
+    myCAM.setAutoFocus(1);
+    // Webサーバーのエンドポイント設定
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/html", R"rawliteral(
+            <!DOCTYPE html>
+            <html lang="ja">
+            <head>
+            <meta charset="UTF-8">
+            <title>カメラ制御</title>
+            <style>button { font-size: 24px; padding: 10px 20px; margin: 10px; }</style>
+            </head>
+            <body>
+            <img id="cameraCapture" src="/capture" />
+            <script>
+            function sendRequest(url) {
+              var xhr = new XMLHttpRequest();
+              xhr.open('GET', url, true);
+              xhr.onreadystatechange = function () {
+                if (xhr.readyState == 4 && xhr.status == 200) {
+                  console.log('Response:', xhr.responseText);
+                }
+              };
+              xhr.send();
+            }
+            </script>
+            <h1>ESP32-C3 LED Control</h1>
+            <button onclick="sendRequest('/setBrightness?value=HIGH')">明るく</button>
+            <button onclick="sendRequest('/setBrightness?value=DEFAULT')">普通</button>
+            <button onclick="sendRequest('/setBrightness?value=LOW')">暗く</button>
+            </body>
+            </html>
+        )rawliteral");
+        // server.sendContent(html);
+        // server.send(200, "text/html", html);
+        });
+    // server.enableCORS(); // Removed as AsyncWebServer does not have this member function
+    server.on("/capture", HTTP_GET, captureCallbackFunction);
+    server.on("/stream", HTTP_GET, streamCallbackFunction);
+    server.on("/setBrightness", HTTP_GET, handleSetBrightness);
+    // server.on("/HIGH", []() { 
+    //     handleSetBrightness(CAM_BRIGHTNESS_LEVEL_4); 
+    //     server.send(200, "text/plain", "Brightness set to HIGH"); });
+    // server.on("/DEFAULT", []() { handleSetBrightness(CAM_BRIGHTNESS_LEVEL_DEFAULT); server.send(200, "text/plain", "Brightness set to DEFAULT"); });
+    // server.on("/LOW", []() { handleSetBrightness(CAM_BRIGHTNESS_LEVEL_MINUS_4); server.send(200, "text/plain", "Brightness set to LOW"); });
     server.onNotFound(handleNotFound);
     server.begin();
-
-    // Print free heap memory
-    Serial.print("Free heap at setup: ");
-    Serial.println(ESP.getFreeHeap());
 }
 
-void loop(){
-    // Print free heap memory periodically
+void loop() {
     static unsigned long lastPrintTime = 0;
-    if (millis() - lastPrintTime > 10000) { // Print every 10 seconds 
+    if (millis() - lastPrintTime > 10000) {
         Serial.print("Free heap in loop: ");
         Serial.println(ESP.getFreeHeap());
         lastPrintTime = millis();
     }
-    server.handleClient();
 }
+
